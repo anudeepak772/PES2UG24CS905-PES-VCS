@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include "object.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -135,10 +136,45 @@ int index_status(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_load(Index *index) {
-    // TODO: Implement index loading
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+    index->count = 0;
+    // Open the index file for reading
+    FILE *f = fopen(".pes/index", "r");
+    
+    // If the file doesn't exist, that's okay! 
+    // It just means the staging area is empty.
+    if (!f) {
+        return 0; 
+    }
+
+    char hex_hash[65];
+    // Read each line: mode, hash, mtime, size, path
+    while (index->count < MAX_INDEX_ENTRIES) {
+        IndexEntry *e = &index->entries[index->count];
+        
+        // We use %255s for the path to prevent buffer overflow
+        // Updated fscanf inside index_load
+        int res = fscanf(f, "%o %64s %ld %ld %255s\n", 
+                 &e->mode, 
+                 hex_hash, 
+                 (long *)&e->mtime_sec, // Cast to long pointer if mtime is time_t
+                 (long *)&e->size,      // Cast to long pointer if size is size_t
+                 e->path);
+        
+        if (res == EOF) break;
+        
+        if (res != 5) {
+            fprintf(stderr, "error: malformed index line at entry %d\n", index->count);
+            fclose(f);
+            return -1;
+        }
+
+        // Convert the hex string from the file back into raw bytes for the struct
+        hex_to_hash(hex_hash, &e->hash);
+        index->count++;
+    }
+
+    fclose(f);
+    return 0;
 }
 
 // Save the index to .pes/index atomically.
@@ -151,11 +187,12 @@ int index_load(Index *index) {
 //   - rename                           : atomically moving the temp file over the old index
 //
 // Returns 0 on success, -1 on error.
+static int compare_index_entries(const void *a, const void *b) {
+  
+}
+
 int index_save(const Index *index) {
-    // TODO: Implement atomic index saving
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+  
 }
 
 // Stage a file for the next commit.
@@ -168,8 +205,5 @@ int index_save(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_add(Index *index, const char *path) {
-    // TODO: Implement file staging
-    // (See Lab Appendix for logical steps)
-    (void)index; (void)path;
-    return -1;
+   
 }
