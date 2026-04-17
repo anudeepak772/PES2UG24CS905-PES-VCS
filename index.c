@@ -135,6 +135,16 @@ int index_status(const Index *index) {
 //   - hex_to_hash                      : converting the parsed string to ObjectID
 //
 // Returns 0 on success, -1 on error.
+
+static int compare_tree_entries(const void *a, const void *b) {
+    // Cast to TreeEntry pointers
+    const TreeEntry *te_a = (const TreeEntry *)a;
+    const TreeEntry *te_b = (const TreeEntry *)b;
+
+    // Compare the filenames
+    return strcmp(te_a->name, te_b->name);
+}
+
 int index_load(Index *index) {
     index->count = 0;
     // Open the index file for reading
