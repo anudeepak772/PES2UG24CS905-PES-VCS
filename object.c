@@ -207,5 +207,35 @@ int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_
         free(full_buf); fclose(f); return -1;
     }
     fclose(f);
+    
+    // 4. Verify integrity (Before parsing, ensure data isn't corrupt)
+    ObjectID actual_id;
+    compute_hash(full_buf, file_size, &actual_id);
+    if (memcmp(id->hash, actual_id.hash, HASH_SIZE) != 0) {
+        free(full_buf); return -1;
+    }
+
+    // 3. Parse the header to extract type and find start of data
+    unsigned char *null_byte = memchr(full_buf, '\0', file_size);
+    if (!null_byte) { free(full_buf); return -1; }
+
+    if (strncmp((char *)full_buf, "blob", 4) == 0) *type_out = OBJ_BLOB;
+    else if (strncmp((char *)full_buf, "tree", 4) == 0) *type_out = OBJ_TREE;
+    else if (strncmp((char *)full_buf, "commit", 6) == 0) *type_out = OBJ_COMMIT;
+    else { free(full_buf); return -1; }
+
+    // 5 & 6. Allocate buffer, copy data portion, and set outputs
+    size_t header_len = (null_byte - full_buf) + 1;
+    size_t data_len = file_size - header_len;
+
+    void *payload = malloc(data_len);
+    if (!payload) { free(full_buf); return -1; }
+
+    memcpy(payload, full_buf + header_len, data_len);
+    
+    *data_out = payload;
+    *len_out = data_len;
+
+    free(full_buf); // Clean up the raw file buffer
     return 0;
 }
