@@ -11,6 +11,7 @@
 
 #include "tree.h"
 #include <stdio.h>
+#include "index.h"
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
@@ -129,9 +130,36 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 //   - object_write    : save that binary buffer to the store as OBJ_TREE
 //
 // Returns 0 on success, -1 on error.
-int tree_from_index(ObjectID *id_out) {
-    // TODO: Implement recursive tree building
-    // (See Lab Appendix for logical steps)
-    (void)id_out;
-    return -1;
+static int build_tree_recursive(const Index *idx, int start, int end, int depth, ObjectID *id_out) {
+    Tree tree;
+    memset(&tree, 0, sizeof(Tree)); // Crucial to zero out for consistency
+
+    for (int i = start; i < end; ) {
+        const IndexEntry *entry = &idx->entries[i];
+        
+        // Look for the next slash starting from the current depth
+        char *slash = strchr(entry->path + depth, '/');
+
+        if (slash == NULL) {
+            // It's a FILE in this directory
+            if (tree.count >= MAX_TREE_ENTRIES) return -1;
+            
+            TreeEntry *te = &tree.entries[tree.count++];
+            te->mode = entry->mode;
+            
+            // Get just the filename part
+            const char *name_start = entry->path + depth;
+            strncpy(te->name, name_start, sizeof(te->name) - 1);
+            memcpy(te->hash.hash, entry->hash.hash, HASH_SIZE);
+            i++;
+        } 
+
+    // Write the completed tree level to the object store
+    void *data = NULL;
+    size_t len = 0;
+    if (tree_serialize(&tree, &data, &len) != 0) return -1;
+    int rc = object_write(OBJ_TREE, data, len, id_out);
+    free(data);
+    return rc;
 }
+
