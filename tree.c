@@ -132,32 +132,64 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 // Returns 0 on success, -1 on error.
 static int build_tree_recursive(const Index *idx, int start, int end, int depth, ObjectID *id_out) {
     Tree tree;
-    memset(&tree, 0, sizeof(Tree)); // Crucial to zero out for consistency
+    memset(&tree, 0, sizeof(Tree));
 
     for (int i = start; i < end; ) {
         const IndexEntry *entry = &idx->entries[i];
         
-        // Look for the next slash starting from the current depth
+        // Find if there is a slash in the path after our current directory depth
         char *slash = strchr(entry->path + depth, '/');
 
         if (slash == NULL) {
-            // It's a FILE in this directory
+            // Case 1: It's a FILE in the current directory
             if (tree.count >= MAX_TREE_ENTRIES) return -1;
             
             TreeEntry *te = &tree.entries[tree.count++];
             te->mode = entry->mode;
             
-            // Get just the filename part
+            // Extract filename only (e.g., "file.txt" from "src/file.txt")
             const char *name_start = entry->path + depth;
             strncpy(te->name, name_start, sizeof(te->name) - 1);
+            te->name[sizeof(te->name) - 1] = '\0'; // Safety null-termination
+            
             memcpy(te->hash.hash, entry->hash.hash, HASH_SIZE);
             i++;
-        } 
+        } else {
+            // Case 2: It's a SUBDIRECTORY
+            if (tree.count >= MAX_TREE_ENTRIES) return -1;
+            
+            size_t dir_name_len = slash - (entry->path + depth);
+            TreeEntry *te = &tree.entries[tree.count++];
+            te->mode = MODE_DIR;
+            
+            // Copy just the folder name (e.g., "src")
+            memcpy(te->name, entry->path + depth, dir_name_len);
+            te->name[dir_name_len] = '\0';
 
-    // Write the completed tree level to the object store
+            // Find all subsequent index entries that belong in this same folder
+            int group_end = i + 1;
+            while (group_end < end) {
+                if (strncmp(idx->entries[group_end].path + depth, te->name, dir_name_len) != 0 ||
+                    idx->entries[group_end].path[depth + dir_name_len] != '/') {
+                    break;
+                }
+                group_end++;
+            }
+
+            // Recurse: build the sub-tree and store its hash in the current tree entry
+            // depth + dir_name_len + 1 skips "folder_name/"
+            if (build_tree_recursive(idx, i, group_end, depth + dir_name_len + 1, &te->hash) != 0) {
+                return -1;
+            }
+            i = group_end; // Skip all files we just processed in that sub-tree
+        }
+    }
+
+    // Serialize this tree level and write it to the object store
     void *data = NULL;
     size_t len = 0;
     if (tree_serialize(&tree, &data, &len) != 0) return -1;
+    
     int rc = object_write(OBJ_TREE, data, len, id_out);
     free(data);
     return rc;
