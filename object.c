@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <openssl/evp.h>
 #include <libgen.h>
+
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
 void hash_to_hex(const ObjectID *id, char *hex_out) {
@@ -119,7 +120,30 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
         return 0; // Deduplication success
     }
 
+    // 4. Create shard directory
+    char dir_path[256];
+    strncpy(dir_path, final_path, sizeof(dir_path));
+    char *shard_dir = dirname(dir_path); 
+    mkdir(shard_dir, 0755); // Returns -1 if exists, which is fine
+
+    // 5. Write to a temporary file
+    char temp_path[270];
+    snprintf(temp_path, sizeof(temp_path), "%s/tmp_XXXXXX", shard_dir);
     
+    int fd = mkstemp(temp_path);
+    if (fd < 0) {
+        free(full_obj);
+        return -1;
+    }
+
+    if (write(fd, full_obj, full_len) != (ssize_t)full_len) {
+        close(fd);
+        unlink(temp_path);
+        free(full_obj);
+        return -1;
+    }
+
+
     return 0;
 }
 
@@ -146,6 +170,5 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 // The caller is responsible for calling free(*data_out).
 // Returns 0 on success, -1 on error (file not found, corrupt, etc.).
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-
-    return 0;
+    
 }
