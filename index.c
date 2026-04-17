@@ -190,7 +190,43 @@ int index_load(Index *index) {
 
 
 int index_save(const Index *index) {
-  
+    // 1. Copy the index so we can sort the entries without 
+    // violating the 'const' read-only parameter
+    Index sorted = *index;
+
+    // 2. Bubble Sort the entries by path
+    for (int i = 0; i < sorted.count - 1; i++) {
+        for (int j = 0; j < sorted.count - i - 1; j++) {
+            if (strcmp(sorted.entries[j].path, sorted.entries[j+1].path) > 0) {
+                IndexEntry temp = sorted.entries[j];
+                sorted.entries[j] = sorted.entries[j+1];
+                sorted.entries[j+1] = temp;
+            }
+        }
+    }
+
+    // 3. Write to temporary file
+    FILE *f = fopen(".pes/index.tmp", "w");
+    if (!f) return -1;
+
+    for (int i = 0; i < sorted.count; i++) {
+        char hex[65];
+        hash_to_hex(&sorted.entries[i].hash, hex);
+        
+        fprintf(f, "%o %s %d %d %s\n",
+                sorted.entries[i].mode, 
+                hex, 
+                (int)sorted.entries[i].mtime_sec, 
+                (int)sorted.entries[i].size, 
+                sorted.entries[i].path);
+    }
+
+    // 4. Force data to disk and swap file names
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    return rename(".pes/index.tmp", ".pes/index");
 }
 
 // Stage a file for the next commit.
