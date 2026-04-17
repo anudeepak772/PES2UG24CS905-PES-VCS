@@ -16,7 +16,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <openssl/evp.h>
-
+#include <libgen.h>
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
 void hash_to_hex(const ObjectID *id, char *hex_out) {
@@ -94,9 +94,33 @@ int object_exists(const ObjectID *id) {
 //
 // Returns 0 on success, -1 on error.
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // TODO: Implement
-    (void)type; (void)data; (void)len; (void)id_out;
-    return -1;
+    // 1. Build the full object (header + data)
+    const char *type_str = (type == OBJ_BLOB) ? "blob" : 
+                           (type == OBJ_TREE) ? "tree" : "commit";
+    
+    // Determine header size; snprintf with NULL tells us the length
+    int header_len = snprintf(NULL, 0, "%s %zu", type_str, len) + 1; // +1 for '\0'
+    size_t full_len = header_len + len;
+    
+    unsigned char *full_obj = malloc(full_len);
+    if (!full_obj) return -1;
+
+    sprintf((char *)full_obj, "%s %zu", type_str, len); // Includes the \0
+    memcpy(full_obj + header_len, data, len);
+
+    // 2. Compute SHA-256 hash of the FULL object
+    compute_hash(full_obj, full_len, id_out);
+
+    // 3. Check if object already exists
+    char final_path[256];
+    object_path(id_out, final_path, sizeof(final_path));
+    if (access(final_path, F_OK) == 0) {
+        free(full_obj);
+        return 0; // Deduplication success
+    }
+
+    
+    return 0;
 }
 
 // Read an object from the store.
@@ -122,7 +146,6 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 // The caller is responsible for calling free(*data_out).
 // Returns 0 on success, -1 on error (file not found, corrupt, etc.).
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // TODO: Implement
-    (void)id; (void)type_out; (void)data_out; (void)len_out;
-    return -1;
+
+    return 0;
 }
