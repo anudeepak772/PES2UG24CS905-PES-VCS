@@ -187,9 +187,7 @@ int index_load(Index *index) {
 //   - rename                           : atomically moving the temp file over the old index
 //
 // Returns 0 on success, -1 on error.
-static int compare_index_entries(const void *a, const void *b) {
-  
-}
+
 
 int index_save(const Index *index) {
   
@@ -205,5 +203,25 @@ int index_save(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_add(Index *index, const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+
+    // Read file contents to hash them
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    void *data = malloc(st.st_size);
+    if (!data) { fclose(f); return -1; }
+    fread(data, 1, st.st_size, f);
+    fclose(f);
+
+    // Write file data as a BLOB object
+    ObjectID blob_id;
+    if (object_write(OBJ_BLOB, data, st.st_size, &blob_id) != 0) {
+        free(data);
+        return -1;
+    }
+    free(data);
+
+  
    
 }
