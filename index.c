@@ -25,6 +25,8 @@
 #include <unistd.h>
 #include <dirent.h>
 
+static int compare_index_entries(const void *a, const void *b);
+
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
 // Find an index entry by path (linear scan).
@@ -136,50 +138,37 @@ int index_status(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 
-static int compare_tree_entries(const void *a, const void *b) {
-    // Cast to TreeEntry pointers
-    const TreeEntry *te_a = (const TreeEntry *)a;
-    const TreeEntry *te_b = (const TreeEntry *)b;
 
-    // Compare the filenames
-    return strcmp(te_a->name, te_b->name);
-}
 
 int index_load(Index *index) {
-    index->count = 0;
-    // Open the index file for reading
-    FILE *f = fopen(".pes/index", "r");
-    
-    // If the file doesn't exist, that's okay! 
-    // It just means the staging area is empty.
-    if (!f) {
-        return 0; 
-    }
+    index->count = 0; 
+    FILE *f = fopen(INDEX_FILE, "r");
+    if (!f) return 0; 
 
-    char hex_hash[65];
-    // Read each line: mode, hash, mtime, size, path
+    char hex[HASH_HEX_SIZE + 1];
+    
     while (index->count < MAX_INDEX_ENTRIES) {
         IndexEntry *e = &index->entries[index->count];
-        
-        // We use %255s for the path to prevent buffer overflow
-        // Updated fscanf inside index_load
-        int res = fscanf(f, "%o %64s %ld %ld %255s\n", 
-                 &e->mode, 
-                 hex_hash, 
-                 (long *)&e->mtime_sec, // Cast to long pointer if mtime is time_t
-                 (long *)&e->size,      // Cast to long pointer if size is size_t
-                 e->path);
-        
+        long long temp_mtime, temp_size;
+
+        int res = fscanf(f, "%o %64s %lld %lld %255s\n", 
+                         &e->mode, hex, &temp_mtime, &temp_size, e->path);
+
+        // 1. Check for end of file first
         if (res == EOF) break;
-        
+
+        // 2. Check for malformed lines (didn't get all 5 items)
         if (res != 5) {
-            fprintf(stderr, "error: malformed index line at entry %d\n", index->count);
             fclose(f);
-            return -1;
+            return -1; 
         }
 
-        // Convert the hex string from the file back into raw bytes for the struct
-        hex_to_hash(hex_hash, &e->hash);
+        // 3. Success: Assign the values and convert the hash
+        e->mtime_sec = (int64_t)temp_mtime;
+        e->size = (int64_t)temp_size;
+        hex_to_hash(hex, &e->hash);
+
+        // 4. ONLY increment once you know the entry is valid
         index->count++;
     }
 
@@ -199,44 +188,36 @@ int index_load(Index *index) {
 // Returns 0 on success, -1 on error.
 
 
+static int compare_index_entries(const void *a, const void *b) {
+    return strcmp(((IndexEntry *)a)->path, ((IndexEntry *)b)->path);
+}
+
 int index_save(const Index *index) {
-    // 1. Copy the index so we can sort the entries without 
-    // violating the 'const' read-only parameter
+    // 1. Sort entries by path before writing
     Index sorted = *index;
+    qsort(sorted.entries, sorted.count, sizeof(IndexEntry), compare_index_entries);
 
-    // 2. Bubble Sort the entries by path
-    for (int i = 0; i < sorted.count - 1; i++) {
-        for (int j = 0; j < sorted.count - i - 1; j++) {
-            if (strcmp(sorted.entries[j].path, sorted.entries[j+1].path) > 0) {
-                IndexEntry temp = sorted.entries[j];
-                sorted.entries[j] = sorted.entries[j+1];
-                sorted.entries[j+1] = temp;
-            }
-        }
-    }
-
-    // 3. Write to temporary file
+    // 2. Write to temporary file
     FILE *f = fopen(".pes/index.tmp", "w");
     if (!f) return -1;
 
     for (int i = 0; i < sorted.count; i++) {
-        char hex[65];
+        char hex[HASH_HEX_SIZE + 1];
         hash_to_hex(&sorted.entries[i].hash, hex);
-        
-        fprintf(f, "%o %s %d %d %s\n",
-                sorted.entries[i].mode, 
-                hex, 
-                (int)sorted.entries[i].mtime_sec, 
-                (int)sorted.entries[i].size, 
-                sorted.entries[i].path);
+        // Inside index_save
+	fprintf(f, "%o %s %lld %lld %s\n", 
+        	sorted.entries[i].mode, hex, 
+        	(long long)sorted.entries[i].mtime_sec, 
+        	(long long)sorted.entries[i].size, 
+        	sorted.entries[i].path);
     }
 
-    // 4. Force data to disk and swap file names
+    // 3. Atomic safety: flush, sync, and rename
     fflush(f);
     fsync(fileno(f));
     fclose(f);
 
-    return rename(".pes/index.tmp", ".pes/index");
+    return rename(".pes/index.tmp", INDEX_FILE);
 }
 
 // Stage a file for the next commit.
@@ -252,15 +233,26 @@ int index_add(Index *index, const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return -1;
 
-    // Read file contents to hash them
+    // 1. Handle file reading
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
+
     void *data = malloc(st.st_size);
-    if (!data) { fclose(f); return -1; }
-    fread(data, 1, st.st_size, f);
+    if (!data && st.st_size > 0) {
+        fclose(f);
+        return -1;
+    }
+
+    if (st.st_size > 0) {
+        if (fread(data, 1, st.st_size, f) != (size_t)st.st_size) {
+            free(data);
+            fclose(f);
+            return -1;
+        }
+    }
     fclose(f);
 
-    // Write file data as a BLOB object
+    // 2. Write to object store
     ObjectID blob_id;
     if (object_write(OBJ_BLOB, data, st.st_size, &blob_id) != 0) {
         free(data);
@@ -268,21 +260,21 @@ int index_add(Index *index, const char *path) {
     }
     free(data);
 
-    // Look for existing entry to update, or create new
+    // 3. Update the Index Entry (The part you have)
     IndexEntry *e = index_find(index, path);
     if (!e) {
         if (index->count >= MAX_INDEX_ENTRIES) return -1;
         e = &index->entries[index->count++];
         strncpy(e->path, path, sizeof(e->path) - 1);
-        e->path[sizeof(e->path) - 1] = '\0';
+        e->path[sizeof(e->path) - 1] = '\0'; // Ensure termination
     }
 
-    // Set metadata
+    // Update metadata
     e->mode = (st.st_mode & S_IXUSR) ? 0100755 : 0100644;
-    e->mtime_sec = st.st_mtime;
-    e->size = st.st_size;
-    memcpy(e->hash.hash, blob_id.hash, HASH_SIZE);
+    e->mtime_sec = (int64_t)st.st_mtime;
+    e->size = (int64_t)st.st_size;
+    e->hash = blob_id;
 
-    // Save the updated index back to disk
-    return index_save(index);
+    // 4. THE MISSING PIECE: Save and return the result
+    return index_save(index); 
 }
