@@ -194,8 +194,51 @@ int head_update(const ObjectID *new_commit) {
 //
 // Returns 0 on success, -1 on error.
 int commit_create(const char *message, ObjectID *commit_id_out) {
-    // TODO: Implement commit creation
-    // (See Lab Appendix for logical steps)
-    (void)message; (void)commit_id_out;
-    return -1;
+    Commit commit;
+    memset(&commit, 0, sizeof(Commit));
+
+    // 1. Build the tree from the index
+    // tree_from_index handles its own internal malloc/free of the Index
+    if (tree_from_index(&commit.tree) != 0) {
+        printf("DEBUG: tree_from_index failed\n");
+        return -1;
+    }
+
+    // 2. Set the parent commit (if it exists)
+    if (head_read(&commit.parent) == 0) {
+        commit.has_parent = 1;
+    } else {
+        // This print is helpful because it confirms we are on the INITIAL commit
+        printf("DEBUG: head_read failed (normal for first commit)\n");
+        commit.has_parent = 0;
+    }
+
+    // 3. Fill in metadata
+    snprintf(commit.author, sizeof(commit.author), "%s", pes_author());
+    commit.timestamp = (uint64_t)time(NULL);
+    snprintf(commit.message, sizeof(commit.message), "%s", message);
+
+    // 4. Serialize the commit struct into text format
+    void *buffer = NULL;
+    size_t len = 0;
+    if (commit_serialize(&commit, &buffer, &len) != 0) {
+        printf("DEBUG: commit_serialize failed\n");
+        return -1;
+    }
+
+    // 5. Write the commit object to the store
+    if (object_write(OBJ_COMMIT, buffer, len, commit_id_out) != 0) {
+        printf("DEBUG: object_write failed\n");
+        free(buffer);
+        return -1;
+    }
+    free(buffer);
+
+    // 6. Update HEAD/branch to point to this new commit
+    if (head_update(commit_id_out) != 0) {
+        printf("DEBUG: head_update failed\n");
+        return -1;
+    }
+
+    return 0;
 }

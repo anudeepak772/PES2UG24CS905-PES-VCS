@@ -195,32 +195,38 @@ static int build_tree_recursive(const Index *idx, int start, int end, int depth,
     return rc;
 }
 int tree_from_index(ObjectID *id_out) {
-    Index idx;
+    // 1. Allocate on Heap
+    Index *idx = malloc(sizeof(Index));
+    if (!idx) return -1;
     
-    // 1. Load the staged files
-    if (index_load(&idx) != 0) {
+    // 2. Load the index
+    if (index_load(idx) != 0) {
         fprintf(stderr, "error: failed to load index\n");
+        free(idx); // MUST free before returning error
         return -1;
     }
     
-    // 2. If nothing is staged, we can't build a tree
-    if (idx.count == 0) {
+    // 3. Check if empty
+    if (idx->count == 0) {
+        free(idx); // MUST free before returning error
         return -1;
     }
 
-    // 3. Mandatory: Sort the index entries by path.
-    // This ensures that all files in "src/" are adjacent, allowing the
-    // recursive function to group them correctly.
-    for (int i = 0; i < idx.count - 1; i++) {
-        for (int j = 0; j < idx.count - i - 1; j++) {
-            if (strcmp(idx.entries[j].path, idx.entries[j+1].path) > 0) {
-                IndexEntry temp = idx.entries[j];
-                idx.entries[j] = idx.entries[j+1];
-                idx.entries[j+1] = temp;
+    // 4. Sort the index entries
+    for (int i = 0; i < idx->count - 1; i++) {
+        for (int j = 0; j < idx->count - i - 1; j++) {
+            if (strcmp(idx->entries[j].path, idx->entries[j+1].path) > 0) {
+                IndexEntry temp = idx->entries[j];
+                idx->entries[j] = idx->entries[j+1];
+                idx->entries[j+1] = temp;
             }
         }
     }
 
-    // 4. Start building from the root (depth 0)
-    return build_tree_recursive(&idx, 0, idx.count, 0, id_out);
+    // 5. Build the tree
+    int rc = build_tree_recursive(idx, 0, idx->count, 0, id_out);
+    
+    // 6. Final Cleanup and Return
+    free(idx); 
+    return rc; // This returns 0 if build_tree_recursive succeeded
 }
